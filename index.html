@@ -74,7 +74,7 @@
       else res = await (await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(req) })).json();
     } catch (e) { throw new Error('通信できませんでした。電波の良い所でもう一度押してください'); }
     if (!res.ok) {
-      if (res.authError && req.action !== 'login') { S.token = ''; store('ac_token', null); showLogin(res.error); }
+      if (res.authError && req.action !== 'login') { S.token = ''; store('ac_token', null); store('ac_me', null); S.me = null; showLogin(res.error); }
       throw new Error(res.error || 'エラーが発生しました');
     }
     return res.data;
@@ -94,23 +94,34 @@
       if (!/^\d{4}$/.test(pin)) { $('lerr').textContent = 'PINは4桁の数字です'; return; }
       // GAS の応答は1回2秒前後かかるので、押したことが分かるようにする（2026-10-22「押しても進まない」）
       $('go').disabled = true; $('go').textContent = 'ログイン中…'; $('lerr').textContent = '';
-      try { var d = await api({ action: 'login', name: name, pin: pin, deviceId: S.dev }); S.token = d.token; store('ac_token', d.token); start(); }
+      try { var d = await api({ action: 'login', name: name, pin: pin, deviceId: S.dev }); S.token = d.token; store('ac_token', d.token); applyMe(d.me, true); }
       catch (e) { $('lerr').textContent = e.message; $('go').disabled = false; $('go').textContent = 'ログイン'; }
     };
   }
 
+  // 自分の情報（名前・車両の一覧・前回の車両）を画面に反映し、次に開いたとき用に端末へ控える。
+  function applyMe(me, first) {
+    var carsChanged = !S.me || S.me.cars.join() !== me.cars.join() || S.me.isConfirmer !== me.isConfirmer;
+    S.me = me; store('ac_me', JSON.stringify(me));
+    $('who').textContent = me.name + ' さん'; $('logout').classList.remove('hidden');
+    if (first) { S.car = me.lastCar || ''; S.daisha = me.lastDaisha || ''; render(); }
+    else if (carsChanged && !(S.tab === 'send' && S.photo)) render();   // 撮った写真があるときは描き直さない
+  }
+
+  // 2回目以降は前回の控えですぐ画面を出し、裏で最新にする（GAS は1回2秒前後かかるため）。
   async function start() {
     if (!S.token) return showLogin();
-    $('main').innerHTML = '<div class="card sub">読み込み中…（数秒かかります）</div>';
-    try { S.me = await api({ action: 'me' }); } catch (e) { if (S.token) $('main').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
-    $('who').textContent = S.me.name + ' さん'; $('logout').classList.remove('hidden');
-    S.car = S.me.lastCar || ''; S.daisha = S.me.lastDaisha || '';
-    render();
+    var cached = null;
+    try { cached = JSON.parse(load('ac_me') || 'null'); } catch (e) {}
+    if (cached && cached.cars) applyMe(cached, true);
+    else $('main').innerHTML = '<div class="card sub">読み込み中…（数秒かかります）</div>';
+    try { applyMe(await api({ action: 'me' }), !cached); }
+    catch (e) { if (S.token && !cached) $('main').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; }
   }
 
   $('logout').onclick = async function () {
     try { await api({ action: 'logout' }); } catch (e) {}
-    S.token = ''; store('ac_token', null); showLogin();
+    S.token = ''; store('ac_token', null); store('ac_me', null); S.me = null; showLogin();
   };
 
   function render() {
@@ -196,9 +207,12 @@
     $('body').innerHTML = '<div class="card sub">読み込み中…</div>';
     try { var d = await api({ action: 'pending' }); } catch (e) { $('body').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
     S.pending = d.items; S.today = d.today;
-    S.pending.forEach(function (it) { if (!S.marks[it.id]) S.marks[it.id] = { method: METHODS[0], result: '', instruction: '' }; });
+    S.pending.forEach(function (it) {
+      if (!S.marks[it.id]) S.marks[it.id] = { method: METHODS[0], result: '', instruction: '' };
+      if (it.dataUrl) S.photos[it.id] = it.dataUrl;   // 写真は一覧と一緒に届く
+    });
     drawConfirm(doneMsg);
-    S.pending.forEach(loadThumb);
+    S.pending.forEach(function (it) { if (!it.dataUrl) loadThumb(it); });   // 届かなかった分だけ取り直す
   }
 
   function drawConfirm(doneMsg) {
