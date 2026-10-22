@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>アルコールチェック</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#dfe3e8; --text:#1f2328; --sub:#5b6470; --muted:#8a929c;
+          --accent:#0b6bcb; --accent-bg:#e6f0fb; --danger:#b42318; --danger-bg:#fdecea; --ok:#1a7f37; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:8px; padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
+  header h1 { font-size:17px; margin:0; flex:1; }
+  header small { color:var(--sub); font-size:12px; }
+  main { max-width:560px; margin:0 auto; padding:12px 16px 40px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .lbl { font-size:13px; color:var(--sub); margin:0 0 6px; }
+  .sub { font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  button { font:inherit; font-size:14px; border:1px solid #c5ccd4; background:#fff; color:var(--text); border-radius:8px; padding:8px 12px; cursor:pointer; }
+  button:active { transform: scale(0.98); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.big { width:100%; padding:13px; font-size:15px; }
+  button.on { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
+  button.bad.on { background:var(--danger-bg); border-color:var(--danger); color:var(--danger); }
+  button.link { border:none; background:none; color:var(--sub); font-size:12px; padding:4px; text-decoration:underline; }
+  input[type=text], input[type=password] { font:inherit; font-size:16px; width:100%; padding:9px 10px; border:1px solid #c5ccd4; border-radius:8px; }
+  .seg { display:flex; flex-wrap:wrap; gap:6px; }
+  .cars { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:5px; }
+  .cars button { font-size:13px; padding:6px 0; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .tabs button { flex:1; }
+  .err { color:var(--danger); font-size:13px; margin-top:6px; min-height:1em; }
+  .ok { color:var(--ok); font-size:13px; margin-top:6px; }
+  .row { padding:12px 0; border-top:1px solid var(--line); }
+  .row:first-child { border-top:none; }
+  .head { display:flex; gap:10px; align-items:center; }
+  .thumb { width:56px; height:56px; border-radius:8px; background:var(--bg); border:1px solid var(--line); object-fit:cover; flex:none; }
+  .badge { font-size:11px; padding:2px 6px; border-radius:6px; background:#fff4d6; color:#7a5200; margin-left:4px; }
+  .preview { width:100%; border-radius:8px; margin-top:10px; }
+  .big-photo { position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; z-index:9; }
+  .big-photo img { max-width:96vw; max-height:90vh; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<script>if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') document.write('<script src="mock.js"><\/script>');</script>
+<header><h1>アルコールチェック</h1><small id="who"></small><button class="link hidden" id="logout">ログアウト</button></header>
+<main id="main"></main>
+<input type="file" id="fileCamera" accept="image/*" capture="user" class="hidden">
+<input type="file" id="fileLibrary" accept="image/*" class="hidden">
+<script>
+(function () {
+  var API_URL = 'https://script.google.com/macros/s/AKfycbxQJ_eEolZrHQg3Z52cjKfWu_J9ds1-4QBAlwxi4i7XmcvKbhnhVzKuPU4ud-6HAkQ/exec';   // GAS の /exec（デプロイ手順.md）
+  var METHODS = ['ビデオ通話', '対面'];
+  var S = { token: load('ac_token'), dev: load('ac_dev') || newId(), me: null, tab: 'send',
+            slot: new Date().getHours() < 12 ? '朝' : '夕', car: '', daisha: '', photo: '', pending: [], marks: {}, photos: {} };
+  store('ac_dev', S.dev);
+  var $ = function (id) { return document.getElementById(id); };
+
+  function store(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+  function load(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function newId() { return 'id-' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  async function api(req) {
+    if (window.MOCK_READY) await window.MOCK_READY;
+    req.token = S.token;
+    var res;
+    try {
+      if (window.MOCK_API) res = await window.MOCK_API(req);
+      else res = await (await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(req) })).json();
+    } catch (e) { throw new Error('通信できませんでした。電波の良い所でもう一度押してください'); }
+    if (!res.ok) {
+      if (res.authError && req.action !== 'login') { S.token = ''; store('ac_token', null); showLogin(res.error); }
+      throw new Error(res.error || 'エラーが発生しました');
+    }
+    return res.data;
+  }
+
+  // ── ログイン（初回だけ。その端末では最後に使ってから1年間PIN不要）──
+  function showLogin(msg) {
+    $('who').textContent = ''; $('logout').classList.add('hidden');
+    $('main').innerHTML = '<div class="card"><div style="font-size:16px;font-weight:600">はじめてのログイン</div>'
+      + '<div class="sub" style="margin-top:4px">この端末では1年間PINは不要です。開くたびに期限が1年延びます。</div>'
+      + '<div class="lbl" style="margin-top:12px">名字</div><input type="text" id="name" autocomplete="username">'
+      + '<div class="lbl" style="margin-top:12px">PIN（4桁）</div><input type="password" id="pin" inputmode="numeric" maxlength="4" autocomplete="current-password">'
+      + '<button class="primary big" id="go" style="margin-top:14px">ログイン</button><div class="err" id="lerr">' + esc(msg || '') + '</div></div>';
+    $('go').onclick = async function () {
+      var name = $('name').value.replace(/\s+/g, ''), pin = $('pin').value.trim();
+      if (!name) { $('lerr').textContent = '名字を入れてください'; return; }
+      if (!/^\d{4}$/.test(pin)) { $('lerr').textContent = 'PINは4桁の数字です'; return; }
+      $('go').disabled = true;
+      try { var d = await api({ action: 'login', name: name, pin: pin, deviceId: S.dev }); S.token = d.token; store('ac_token', d.token); start(); }
+      catch (e) { $('lerr').textContent = e.message; $('go').disabled = false; }
+    };
+  }
+
+  async function start() {
+    if (!S.token) return showLogin();
+    $('main').innerHTML = '<div class="card sub">読み込み中…</div>';
+    try { S.me = await api({ action: 'me' }); } catch (e) { if (S.token) $('main').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
+    $('who').textContent = S.me.name + ' さん'; $('logout').classList.remove('hidden');
+    S.car = S.me.lastCar || ''; S.daisha = S.me.lastDaisha || '';
+    render();
+  }
+
+  $('logout').onclick = async function () {
+    try { await api({ action: 'logout' }); } catch (e) {}
+    S.token = ''; store('ac_token', null); showLogin();
+  };
+
+  function render() {
+    var tabs = S.me.isConfirmer ? '<div class="tabs"><button id="tSend" class="' + (S.tab === 'send' ? 'on' : '') + '">チェックを送る</button>'
+      + '<button id="tConf" class="' + (S.tab === 'conf' ? 'on' : '') + '">確認する</button></div>' : '';
+    $('main').innerHTML = tabs + '<div id="body"></div>';
+    if (S.me.isConfirmer) {
+      $('tSend').onclick = function () { S.tab = 'send'; render(); };
+      $('tConf').onclick = function () { S.tab = 'conf'; render(); };
+    }
+    if (S.tab === 'conf' && S.me.isConfirmer) renderConfirm(); else renderSend();
+  }
+
+  // ── 運転者：朝夕・車両・写真 ──
+  function renderSend(doneMsg) {
+    var cars = S.me.cars.concat(['代車']).map(function (c) {
+      return '<button data-car="' + esc(c) + '" class="' + (S.car === c ? 'on' : '') + '">' + esc(c) + '</button>';
+    }).join('');
+    $('body').innerHTML =
+      '<div class="card"><div class="lbl">朝・夕</div><div class="seg" id="slot">'
+      + ['朝', '夕'].map(function (s) { return '<button data-slot="' + s + '" class="' + (S.slot === s ? 'on' : '') + '">' + s + (s === '朝' ? '（運転前）' : '（運転後）') + '</button>'; }).join('')
+      + '</div></div>'
+      + '<div class="card"><div class="lbl">車両ナンバー</div><div class="cars" id="cars">' + cars + '</div>'
+      + '<div id="daishaW" class="' + (S.car === '代車' ? '' : 'hidden') + '" style="margin-top:8px"><input type="text" id="daisha" placeholder="代車のナンバー（例：滋賀 500 わ 12-34）" value="' + esc(S.daisha) + '"></div></div>'
+      + '<div class="card"><div class="lbl">顔と検知器の数値が写った写真</div><div class="two">'
+      + '<button class="primary big" id="bCam">カメラで撮る</button><button class="big" id="bLib">写真から選ぶ</button></div>'
+      + '<div id="pv">' + (S.photo ? '<img class="preview" src="' + S.photo + '" alt="送る写真"><div class="sub">' + S.photoInfo + '</div>' : '') + '</div></div>'
+      + '<button class="big" id="send">送信</button><div class="err" id="serr"></div>'
+      + (doneMsg ? '<div class="ok">' + esc(doneMsg) + '</div>' : '');
+    $('slot').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.slot = b.dataset.slot; renderSend(); };
+    $('cars').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.car = b.dataset.car; renderSend(); };
+    if ($('daisha')) $('daisha').oninput = function () { S.daisha = this.value; $('serr').textContent = ''; };
+    $('bCam').onclick = function () { $('fileCamera').value = ''; $('fileCamera').click(); };
+    $('bLib').onclick = function () { $('fileLibrary').value = ''; $('fileLibrary').click(); };
+    $('send').onclick = send;
+  }
+
+  // 端末の中で縮小してから送る（長辺1280px・JPEG）。大きければ一段小さくする。
+  function compress(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image(), url = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var tries = [[1280, 0.7], [1024, 0.6], [800, 0.5]], out = null, w = 0, h = 0;
+        for (var i = 0; i < tries.length; i++) {
+          var s = Math.min(1, tries[i][0] / Math.max(img.width, img.height));
+          w = Math.round(img.width * s); h = Math.round(img.height * s);
+          var c = document.createElement('canvas'); c.width = w; c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          out = c.toDataURL('image/jpeg', tries[i][1]);
+          if (out.length * 0.75 <= 300 * 1024) break;
+        }
+        resolve({ dataUrl: out, info: Math.round(file.size / 1024).toLocaleString() + 'KB → ' + Math.round(out.length * 0.75 / 1024).toLocaleString() + 'KB に縮小' });
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('写真を読み込めませんでした。もう一度撮ってください')); };
+      img.src = url;
+    });
+  }
+  async function onFile(e) {
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try { var r = await compress(f); S.photo = r.dataUrl; S.photoInfo = r.info; renderSend(); }
+    catch (err) { $('serr').textContent = err.message; }
+  }
+  $('fileCamera').onchange = onFile;
+  $('fileLibrary').onchange = onFile;
+
+  async function send() {
+    var err = $('serr');
+    if (!S.car) { err.textContent = '車両ナンバーを選んでください'; return; }
+    if (S.car === '代車' && !S.daisha.trim()) { err.textContent = '代車のナンバーを入れてください'; return; }
+    if (!S.photo) { err.textContent = '写真を撮るか選んでから送信してください'; return; }
+    $('send').disabled = true; $('send').textContent = '送信中…';
+    try {
+      var d = await api({ action: 'submit', requestId: newId(), slot: S.slot, car: S.car, daisha: S.daisha, photo: S.photo });
+      S.photo = '';
+      renderSend('送信しました（' + S.slot + '・' + (S.car === '代車' ? '代車 ' + S.daisha.trim() : S.car) + '・' + d.time.slice(11, 16) + '）');
+    } catch (e) { err.textContent = e.message; $('send').disabled = false; $('send').textContent = '送信'; }
+  }
+
+  // ── 確認者：人ごとに方法と有無をタップ ──
+  async function renderConfirm(doneMsg) {
+    $('body').innerHTML = '<div class="card sub">読み込み中…</div>';
+    try { var d = await api({ action: 'pending' }); } catch (e) { $('body').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
+    S.pending = d.items; S.today = d.today;
+    S.pending.forEach(function (it) { if (!S.marks[it.id]) S.marks[it.id] = { method: METHODS[0], result: '', instruction: '' }; });
+    drawConfirm(doneMsg);
+    S.pending.forEach(loadThumb);
+  }
+
+  function drawConfirm(doneMsg) {
+    var rows = S.pending.map(function (it) {
+      var m = S.marks[it.id], when = (it.date !== S.today ? '<span class="badge">前日</span>' : '');
+      var head = '<div class="head"><img class="thumb" data-big="' + it.id + '" id="th-' + it.id + '" alt="' + esc(it.driver) + 'さんの写真"' + (S.photos[it.id] ? ' src="' + S.photos[it.id] + '"' : '') + '>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:15px">' + esc(it.driver) + when + '</div>'
+        + '<div class="sub" style="margin:2px 0 0">' + esc(it.slot) + '・車両 ' + esc(it.car) + '・送信 ' + esc(it.time.slice(11, 16)) + '</div></div></div>';
+      if (it.self) return '<div class="row">' + head + '<div class="sub">自分の分はほかの確認者が記録します</div></div>';
+      return '<div class="row">' + head
+        + '<div class="sub">確認の方法</div><div class="seg">' + METHODS.map(function (x) { return '<button data-id="' + it.id + '" data-method="' + x + '" class="' + (m.method === x ? 'on' : '') + '">' + x + '</button>'; }).join('') + '</div>'
+        + '<div class="sub">酒気帯び</div><div class="seg"><button data-id="' + it.id + '" data-result="なし" class="' + (m.result === 'なし' ? 'on' : '') + '">なし</button>'
+        + '<button data-id="' + it.id + '" data-result="あり" class="bad ' + (m.result === 'あり' ? 'on' : '') + '">あり</button></div>'
+        + (m.result === 'あり' ? '<input type="text" data-ins="' + it.id + '" value="' + esc(m.instruction) + '" placeholder="指示事項：運転中止・代わりの運転者 など" style="margin-top:8px">' : '')
+        + '</div>';
+    }).join('');
+    var n = chosen().length;
+    $('body').innerHTML = '<div class="card"><div style="display:flex;align-items:center"><div style="flex:1;font-size:15px;font-weight:600">確認待ち（' + S.pending.length + '件）</div>'
+      + '<button class="link" id="reload">最新にする</button></div>'
+      + (S.pending.length ? rows : '<div class="sub">確認待ちはありません。</div>') + '</div>'
+      + (S.pending.length ? '<button class="primary big" id="save">確認を記録（' + n + '名）</button>' : '')
+      + '<div class="err" id="cerr"></div>' + (doneMsg ? '<div class="ok">' + esc(doneMsg) + '</div>' : '');
+    $('reload').onclick = function () { renderConfirm(); };
+    $('body').onclick = function (e) {
+      var b = e.target.closest('button[data-id]'), t = e.target.closest('img[data-big]');
+      if (t && S.photos[t.dataset.big]) return showBig(S.photos[t.dataset.big]);
+      if (!b) return;
+      var m = S.marks[b.dataset.id];
+      if (b.dataset.method) m.method = b.dataset.method;
+      if (b.dataset.result) m.result = b.dataset.result;
+      drawConfirm();
+    };
+    $('body').oninput = function (e) { var id = e.target.dataset && e.target.dataset.ins; if (id) { S.marks[id].instruction = e.target.value; $('cerr').textContent = ''; } };
+    if ($('save')) $('save').onclick = save;
+  }
+
+  function chosen() { return S.pending.filter(function (it) { return !it.self && S.marks[it.id].result; }); }
+
+  async function save() {
+    var list = chosen(), err = $('cerr');
+    if (!list.length) { err.textContent = '記録する人の「なし／あり」を選んでください'; return; }
+    var miss = list.filter(function (it) { return S.marks[it.id].result === 'あり' && !S.marks[it.id].instruction.trim(); })[0];
+    if (miss) { err.textContent = miss.driver + 'さんの指示事項を入れてください'; return; }
+    $('save').disabled = true; $('save').textContent = '記録中…';
+    try {
+      var items = list.map(function (it) { var m = S.marks[it.id]; return { id: it.id, method: m.method, result: m.result, instruction: m.instruction }; });
+      var d = await api({ action: 'confirm', requestId: newId(), items: items });
+      var bad = list.filter(function (it) { return S.marks[it.id].result === 'あり'; }).length;
+      list.forEach(function (it) { delete S.marks[it.id]; });
+      renderConfirm(d.count + '名の確認を記録しました' + (bad ? '（「あり」を安全運転管理者へメールしました）' : ''));
+    } catch (e) { err.textContent = e.message; $('save').disabled = false; $('save').textContent = '確認を記録（' + list.length + '名）'; }
+  }
+
+  async function loadThumb(it) {
+    if (S.photos[it.id]) return;
+    try { var d = await api({ action: 'photo', id: it.id }); S.photos[it.id] = d.dataUrl; var el = $('th-' + it.id); if (el) el.src = d.dataUrl; } catch (e) {}
+  }
+
+  function showBig(src) {
+    var w = document.createElement('div'); w.className = 'big-photo';
+    w.innerHTML = '<img src="' + src + '" alt="拡大した写真">'; w.onclick = function () { w.remove(); };
+    document.body.appendChild(w);
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
