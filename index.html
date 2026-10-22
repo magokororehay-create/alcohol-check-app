@@ -39,6 +39,7 @@
   .head { display:flex; gap:10px; align-items:center; }
   .thumb { width:56px; height:56px; border-radius:8px; background:var(--bg); border:1px solid var(--line); object-fit:cover; flex:none; }
   .badge { font-size:11px; padding:2px 6px; border-radius:6px; background:#fff4d6; color:#7a5200; margin-left:4px; }
+  .badge.warn { background:var(--danger-bg); color:var(--danger); }
   .preview { width:100%; border-radius:8px; margin-top:10px; }
   .big-photo { position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; z-index:9; }
   .big-photo img { max-width:96vw; max-height:90vh; }
@@ -56,7 +57,8 @@
   var API_URL = 'https://script.google.com/macros/s/AKfycbxQJ_eEolZrHQg3Z52cjKfWu_J9ds1-4QBAlwxi4i7XmcvKbhnhVzKuPU4ud-6HAkQ/exec';   // GAS の /exec（デプロイ手順.md）
   var METHODS = ['ビデオ通話', '対面'];
   var S = { token: load('ac_token'), dev: load('ac_dev') || newId(), me: null, tab: 'send',
-            slot: new Date().getHours() < 12 ? '朝' : '夕', car: '', daisha: '', photo: '', pending: [], marks: {}, photos: {} };
+            slot: '運転前', slotTouched: false, car: '', daisha: '', photo: '', takenAt: 0, pending: [], marks: {}, photos: {}, devices: [] };
+  var OLD_PHOTO_MIN = 30;   // Schema.gs と同じ（これより古い写真は警告して、記録にも残る）
   store('ac_dev', S.dev);
   var $ = function (id) { return document.getElementById(id); };
 
@@ -104,8 +106,11 @@
     var carsChanged = !S.me || S.me.cars.join() !== me.cars.join() || S.me.isConfirmer !== me.isConfirmer;
     S.me = me; store('ac_me', JSON.stringify(me));
     $('who').textContent = me.name + ' さん'; $('logout').classList.remove('hidden');
+    // 運転前／運転後はサーバが今日の送信から決める（人が押して変えたときはそれを優先）
+    var slotChanged = !S.slotTouched && me.nextSlot && me.nextSlot !== S.slot;
+    if (!S.slotTouched && me.nextSlot) S.slot = me.nextSlot;
     if (first) { S.car = me.lastCar || ''; S.daisha = me.lastDaisha || ''; render(); }
-    else if (carsChanged && !(S.tab === 'send' && S.photo)) render();   // 撮った写真があるときは描き直さない
+    else if ((carsChanged || slotChanged) && !(S.tab === 'send' && S.photo)) render();   // 撮った写真があるときは描き直さない
   }
 
   // 2回目以降は前回の控えですぐ画面を出し、裏で最新にする（GAS は1回2秒前後かかるため）。
@@ -135,23 +140,29 @@
     if (S.tab === 'conf' && S.me.isConfirmer) renderConfirm(); else renderSend();
   }
 
-  // ── 運転者：朝夕・車両・写真 ──
+  // 撮影からの分。端末がファイルの時刻を付けないときは null（判定しない）。
+  function photoAgeMin() { return S.takenAt > 0 ? Math.floor((Date.now() - S.takenAt) / 60000) : null; }
+
+  // ── 運転者：運転前後（自動で選ぶ）・車両・写真 ──
   function renderSend(doneMsg) {
     var cars = S.me.cars.concat(['代車']).map(function (c) {
       return '<button data-car="' + esc(c) + '" class="' + (S.car === c ? 'on' : '') + '">' + esc(c) + '</button>';
     }).join('');
+    var age = photoAgeMin();
+    var oldWarn = S.photo && age != null && age > OLD_PHOTO_MIN
+      ? '<div class="err">撮影から約' + age + '分たった写真です。いまの状態を「カメラで撮る」で撮り直してください（このまま送ると記録に「古い写真」と残ります）。</div>' : '';
     $('body').innerHTML =
-      '<div class="card"><div class="lbl">朝・夕</div><div class="seg" id="slot">'
-      + ['朝', '夕'].map(function (s) { return '<button data-slot="' + s + '" class="' + (S.slot === s ? 'on' : '') + '">' + s + (s === '朝' ? '（運転前）' : '（運転後）') + '</button>'; }).join('')
+      '<div class="card"><div class="lbl">運転前・運転後 <span style="color:var(--muted)">（今日の送信から自動で選んでいます）</span></div><div class="seg" id="slot">'
+      + ['運転前', '運転後'].map(function (s) { return '<button data-slot="' + s + '" class="' + (S.slot === s ? 'on' : '') + '">' + s + '</button>'; }).join('')
       + '</div></div>'
       + '<div class="card"><div class="lbl">車両ナンバー</div><div class="cars" id="cars">' + cars + '</div>'
       + '<div id="daishaW" class="' + (S.car === '代車' ? '' : 'hidden') + '" style="margin-top:8px"><input type="text" id="daisha" placeholder="代車のナンバー（例：滋賀 500 わ 12-34）" value="' + esc(S.daisha) + '"></div></div>'
       + '<div class="card"><div class="lbl">顔と検知器の数値が写った写真</div><div class="two">'
       + '<button class="primary big" id="bCam">カメラで撮る</button><button class="big" id="bLib">写真から選ぶ</button></div>'
-      + '<div id="pv">' + (S.photo ? '<img class="preview" src="' + S.photo + '" alt="送る写真"><div class="sub">' + S.photoInfo + '</div>' : '') + '</div></div>'
+      + '<div id="pv">' + (S.photo ? '<img class="preview" src="' + S.photo + '" alt="送る写真"><div class="sub">' + S.photoInfo + '</div>' + oldWarn : '') + '</div></div>'
       + '<button class="big" id="send">送信</button><div class="err" id="serr"></div>'
       + (doneMsg ? '<div class="ok">' + esc(doneMsg) + '</div>' : '');
-    $('slot').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.slot = b.dataset.slot; renderSend(); };
+    $('slot').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.slot = b.dataset.slot; S.slotTouched = true; renderSend(); };
     $('cars').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.car = b.dataset.car; renderSend(); };
     if ($('daisha')) $('daisha').oninput = function () { S.daisha = this.value; $('serr').textContent = ''; };
     $('bCam').onclick = function () { $('fileCamera').value = ''; $('fileCamera').click(); };
@@ -183,7 +194,7 @@
   async function onFile(e) {
     var f = e.target.files && e.target.files[0];
     if (!f) return;
-    try { var r = await compress(f); S.photo = r.dataUrl; S.photoInfo = r.info; renderSend(); }
+    try { var r = await compress(f); S.photo = r.dataUrl; S.photoInfo = r.info; S.takenAt = f.lastModified || 0; renderSend(); }
     catch (err) { $('serr').textContent = err.message; }
   }
   $('fileCamera').onchange = onFile;
@@ -196,9 +207,11 @@
     if (!S.photo) { err.textContent = '写真を撮るか選んでから送信してください'; return; }
     $('send').disabled = true; $('send').textContent = '送信中…';
     try {
-      var d = await api({ action: 'submit', requestId: newId(), slot: S.slot, car: S.car, daisha: S.daisha, photo: S.photo });
-      S.photo = '';
-      renderSend('送信しました（' + S.slot + '・' + (S.car === '代車' ? '代車 ' + S.daisha.trim() : S.car) + '・' + d.time.slice(11, 16) + '）');
+      var d = await api({ action: 'submit', requestId: newId(), slot: S.slot, car: S.car, daisha: S.daisha, photo: S.photo, takenAt: S.takenAt });
+      var sent = S.slot;
+      S.photo = ''; S.takenAt = 0; S.slotTouched = false;
+      if (d.nextSlot) S.slot = d.nextSlot;   // 運転前を送ったら次は運転後
+      renderSend('送信しました（' + sent + '・' + (S.car === '代車' ? '代車 ' + S.daisha.trim() : S.car) + '・' + d.time.slice(11, 16) + '）');
     } catch (e) { err.textContent = e.message; $('send').disabled = false; $('send').textContent = '送信'; }
   }
 
@@ -206,7 +219,7 @@
   async function renderConfirm(doneMsg) {
     $('body').innerHTML = '<div class="card sub">読み込み中…</div>';
     try { var d = await api({ action: 'pending' }); } catch (e) { $('body').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
-    S.pending = d.items; S.today = d.today;
+    S.pending = d.items; S.today = d.today; S.devices = d.devices || []; S.lateMin = d.lateMin || 60; S.oldPhotoMin = d.oldPhotoMin || OLD_PHOTO_MIN;
     S.pending.forEach(function (it) {
       if (!S.marks[it.id]) S.marks[it.id] = { method: METHODS[0], result: '', instruction: '' };
       if (it.dataUrl) S.photos[it.id] = it.dataUrl;   // 写真は一覧と一緒に届く
@@ -217,7 +230,9 @@
 
   function drawConfirm(doneMsg) {
     var rows = S.pending.map(function (it) {
-      var m = S.marks[it.id], when = (it.date !== S.today ? '<span class="badge">前日</span>' : '');
+      var m = S.marks[it.id], when = (it.date !== S.today ? '<span class="badge">前日</span>' : '')
+        + (it.waitMin > S.lateMin ? '<span class="badge warn">送信から' + it.waitMin + '分</span>' : '')
+        + (it.photoAge != null && it.photoAge > S.oldPhotoMin ? '<span class="badge warn">古い写真</span>' : '');
       var head = '<div class="head"><img class="thumb" data-big="' + it.id + '" id="th-' + it.id + '" alt="' + esc(it.driver) + 'さんの写真"' + (S.photos[it.id] ? ' src="' + S.photos[it.id] + '"' : '') + '>'
         + '<div style="flex:1;min-width:0"><div style="font-size:15px">' + esc(it.driver) + when + '</div>'
         + '<div class="sub" style="margin:2px 0 0">' + esc(it.slot) + '・車両 ' + esc(it.car) + '・送信 ' + esc(it.time.slice(11, 16)) + '</div></div></div>';
@@ -229,24 +244,62 @@
         + (m.result === 'あり' ? '<input type="text" data-ins="' + it.id + '" value="' + esc(m.instruction) + '" placeholder="指示事項：運転中止・代わりの運転者 など" style="margin-top:8px">' : '')
         + '</div>';
     }).join('');
-    var n = chosen().length;
+    var n = chosen().length, others = S.pending.filter(function (it) { return !it.self; }).length;
     $('body').innerHTML = '<div class="card"><div style="display:flex;align-items:center"><div style="flex:1;font-size:15px;font-weight:600">確認待ち（' + S.pending.length + '件）</div>'
       + '<button class="link" id="reload">最新にする</button></div>'
+      + (others > 1 ? '<button id="allNone" style="width:100%;margin:6px 0">まだ選んでいない人を全員「なし」にする</button>' : '')
       + (S.pending.length ? rows : '<div class="sub">確認待ちはありません。</div>') + '</div>'
       + (S.pending.length ? '<button class="primary big" id="save">確認を記録（' + n + '名）</button>' : '')
-      + '<div class="err" id="cerr"></div>' + (doneMsg ? '<div class="ok">' + esc(doneMsg) + '</div>' : '');
+      + '<div class="err" id="cerr"></div>' + (doneMsg ? '<div class="ok">' + esc(doneMsg) + '</div>' : '')
+      + inspectHtml();
     $('reload').onclick = function () { renderConfirm(); };
+    if ($('allNone')) $('allNone').onclick = function () {
+      S.pending.forEach(function (it) { if (!it.self && !S.marks[it.id].result) S.marks[it.id].result = 'なし'; });
+      drawConfirm();
+    };
     $('body').onclick = function (e) {
-      var b = e.target.closest('button[data-id]'), t = e.target.closest('img[data-big]');
+      var b = e.target.closest('button[data-id]'), t = e.target.closest('img[data-big]'), ib = e.target.closest('button[data-dev]');
       if (t && S.photos[t.dataset.big]) return showBig(S.photos[t.dataset.big]);
+      if (ib) return inspect(ib.dataset.dev, ib.dataset.res);
       if (!b) return;
       var m = S.marks[b.dataset.id];
       if (b.dataset.method) m.method = b.dataset.method;
       if (b.dataset.result) m.result = b.dataset.result;
       drawConfirm();
     };
-    $('body').oninput = function (e) { var id = e.target.dataset && e.target.dataset.ins; if (id) { S.marks[id].instruction = e.target.value; $('cerr').textContent = ''; } };
+    $('body').oninput = function (e) {
+      var id = e.target.dataset && e.target.dataset.ins;
+      if (id) { S.marks[id].instruction = e.target.value; $('cerr').textContent = ''; }
+      if (e.target.dataset && e.target.dataset.memo != null) { S.memos = S.memos || {}; S.memos[e.target.dataset.memo] = e.target.value; }
+    };
     if ($('save')) $('save').onclick = save;
+  }
+
+  // ── 検知器の点検（通達 記2(3)イ：定期的に故障の有無を確認）──
+  function inspectHtml() {
+    if (!S.devices.length) return '';
+    S.memos = S.memos || {};
+    return '<div class="card" style="margin-top:14px"><div style="font-size:15px;font-weight:600">検知器の点検</div>'
+      + '<div class="sub">取扱説明書どおりに動くか確かめたら押してください。</div>'
+      + S.devices.map(function (x) {
+        var state = x.last ? '最後の点検 ' + esc(x.last) + (x.result === '異常あり' ? '（異常あり）' : '') : '点検の記録なし';
+        return '<div class="row"><div style="display:flex;align-items:center;gap:6px"><div style="flex:1">' + esc(x.device)
+          + (x.due ? '<span class="badge warn">要点検</span>' : '') + '<div class="sub" style="margin:2px 0 0">' + state + '</div></div></div>'
+          + '<div class="two" style="margin-top:6px"><button data-dev="' + esc(x.device) + '" data-res="異常なし">点検した（異常なし）</button>'
+          + '<button class="bad" data-dev="' + esc(x.device) + '" data-res="異常あり">異常あり</button></div>'
+          + '<input type="text" data-memo="' + esc(x.device) + '" value="' + esc(S.memos[x.device] || '') + '" placeholder="異常ありのときは内容（例：電源が入らない）" style="margin-top:6px"></div>';
+      }).join('') + '<div class="err" id="ierr"></div></div>';
+  }
+
+  async function inspect(device, result) {
+    var memo = (S.memos && S.memos[device] || '').trim();
+    if (result === '異常あり' && !memo) { $('ierr').textContent = '異常の内容を入れてから「異常あり」を押してください'; return; }
+    $('ierr').textContent = '記録中…';
+    try {
+      var d = await api({ action: 'inspect', requestId: newId(), device: device, result: result, memo: memo });
+      S.devices = d.devices; if (S.memos) delete S.memos[device];
+      drawConfirm(device + 'の点検（' + result + '）を記録しました');
+    } catch (e) { $('ierr').textContent = e.message; }
   }
 
   function chosen() { return S.pending.filter(function (it) { return !it.self && S.marks[it.id].result; }); }
