@@ -19,6 +19,7 @@
   .sub { font-size:12px; color:var(--muted); margin:8px 0 4px; }
   button { font:inherit; font-size:14px; border:1px solid #c5ccd4; background:#fff; color:var(--text); border-radius:8px; padding:8px 12px; cursor:pointer; }
   button:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.6; cursor: wait; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.big { width:100%; padding:13px; font-size:15px; }
   button.on { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
@@ -91,15 +92,16 @@
       var name = $('name').value.replace(/\s+/g, ''), pin = $('pin').value.trim();
       if (!name) { $('lerr').textContent = '名字を入れてください'; return; }
       if (!/^\d{4}$/.test(pin)) { $('lerr').textContent = 'PINは4桁の数字です'; return; }
-      $('go').disabled = true;
+      // GAS の応答は1回2秒前後かかるので、押したことが分かるようにする（2026-10-22「押しても進まない」）
+      $('go').disabled = true; $('go').textContent = 'ログイン中…'; $('lerr').textContent = '';
       try { var d = await api({ action: 'login', name: name, pin: pin, deviceId: S.dev }); S.token = d.token; store('ac_token', d.token); start(); }
-      catch (e) { $('lerr').textContent = e.message; $('go').disabled = false; }
+      catch (e) { $('lerr').textContent = e.message; $('go').disabled = false; $('go').textContent = 'ログイン'; }
     };
   }
 
   async function start() {
     if (!S.token) return showLogin();
-    $('main').innerHTML = '<div class="card sub">読み込み中…</div>';
+    $('main').innerHTML = '<div class="card sub">読み込み中…（数秒かかります）</div>';
     try { S.me = await api({ action: 'me' }); } catch (e) { if (S.token) $('main').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; return; }
     $('who').textContent = S.me.name + ' さん'; $('logout').classList.remove('hidden');
     S.car = S.me.lastCar || ''; S.daisha = S.me.lastDaisha || '';
