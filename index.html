@@ -24,6 +24,7 @@
   button.big { width:100%; padding:13px; font-size:15px; }
   button.on { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
   button.bad.on { background:var(--danger-bg); border-color:var(--danger); color:var(--danger); }
+  button.done { background:#e7f5ec; border-color:var(--ok); color:var(--ok); }
   button.link { border:none; background:none; color:var(--sub); font-size:12px; padding:4px; text-decoration:underline; }
   input[type=text], input[type=password] { font:inherit; font-size:16px; width:100%; padding:9px 10px; border:1px solid #c5ccd4; border-radius:8px; }
   .seg { display:flex; flex-wrap:wrap; gap:6px; }
@@ -260,7 +261,7 @@
     $('body').onclick = function (e) {
       var b = e.target.closest('button[data-id]'), t = e.target.closest('img[data-big]'), ib = e.target.closest('button[data-dev]');
       if (t && S.photos[t.dataset.big]) return showBig(S.photos[t.dataset.big]);
-      if (ib) return inspect(ib.dataset.dev, ib.dataset.res);
+      if (ib) return inspect(ib.dataset.dev, ib.dataset.res, ib);
       if (!b) return;
       var m = S.marks[b.dataset.id];
       if (b.dataset.method) m.method = b.dataset.method;
@@ -283,23 +284,28 @@
       + '<div class="sub">取扱説明書どおりに動くか確かめたら押してください。</div>'
       + S.devices.map(function (x) {
         var state = x.last ? '最後の点検 ' + esc(x.last) + (x.result === '異常あり' ? '（異常あり）' : '') : '点検の記録なし';
+        // 点検の期限内なら押したボタンに色を付けたまま残す（サーバの記録から決めるので、開き直しても残る）
+        var okDone = !x.due && x.result === '異常なし', ngDone = x.result === '異常あり';
+        var md = x.last ? x.last.slice(5).replace('-', '/') : '';
         return '<div class="row"><div style="display:flex;align-items:center;gap:6px"><div style="flex:1">' + esc(x.device)
           + (x.due ? '<span class="badge warn">要点検</span>' : '') + '<div class="sub" style="margin:2px 0 0">' + state + '</div></div></div>'
-          + '<div class="two" style="margin-top:6px"><button data-dev="' + esc(x.device) + '" data-res="異常なし">点検した（異常なし）</button>'
-          + '<button class="bad" data-dev="' + esc(x.device) + '" data-res="異常あり">異常あり</button></div>'
+          + '<div class="two" style="margin-top:6px"><button data-dev="' + esc(x.device) + '" data-res="異常なし" class="' + (okDone ? 'done' : '') + '">'
+          + (okDone ? '点検済み（' + md + '）' : '点検した（異常なし）') + '</button>'
+          + '<button class="bad ' + (ngDone ? 'on' : '') + '" data-dev="' + esc(x.device) + '" data-res="異常あり">' + (ngDone ? '異常あり（' + md + '）' : '異常あり') + '</button></div>'
           + '<input type="text" data-memo="' + esc(x.device) + '" value="' + esc(S.memos[x.device] || '') + '" placeholder="異常ありのときは内容（例：電源が入らない）" style="margin-top:6px"></div>';
       }).join('') + '<div class="err" id="ierr"></div></div>';
   }
 
-  async function inspect(device, result) {
+  async function inspect(device, result, btn) {
     var memo = (S.memos && S.memos[device] || '').trim();
     if (result === '異常あり' && !memo) { $('ierr').textContent = '異常の内容を入れてから「異常あり」を押してください'; return; }
-    $('ierr').textContent = '記録中…';
+    if (btn) { btn.classList.add(result === '異常なし' ? 'done' : 'on'); btn.textContent = '記録中…'; btn.disabled = true; }   // 押した瞬間に色を変える
+    $('ierr').textContent = '';
     try {
       var d = await api({ action: 'inspect', requestId: newId(), device: device, result: result, memo: memo });
       S.devices = d.devices; if (S.memos) delete S.memos[device];
       drawConfirm(device + 'の点検（' + result + '）を記録しました');
-    } catch (e) { $('ierr').textContent = e.message; }
+    } catch (e) { $('ierr').textContent = e.message; drawConfirm(); }
   }
 
   function chosen() { return S.pending.filter(function (it) { return !it.self && S.marks[it.id].result; }); }
